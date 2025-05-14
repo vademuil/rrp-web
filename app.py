@@ -87,7 +87,11 @@ def calculate_adjusted_prices(base_price, ssrp_df, partner_percent, rates, curre
                 return base_val
             return row["Net EUR"]
 
-        df.loc[group_df.index, "Adj Net EUR"] = group_df.apply(adjust, axis=1)
+        df.loc[group_df.index, "Adj Net EUR"] = group_df["Net EUR"].where(
+    (group_df["Net EUR"] >= base_val) |
+    ((group_df["Net EUR"] - base_val) / base_val * 100).abs() <= 5,
+    other=base_val
+)
 
     df["Adj Net Local"] = df["Adj Net EUR"] * df["Rate"]
     df["Final SRP"] = df.apply(
