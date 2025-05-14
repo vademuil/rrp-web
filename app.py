@@ -62,6 +62,8 @@ def calculate_adjusted_prices(base_price, ssrp_df, partner_percent, rates, curre
             net_eur = round(net_local / rate, 4)
 
             group, base_currency = find_group_and_base(currency)
+            if group is None or base_currency is None:
+                continue
 
             rows.append({
                 "Country": country.upper(),
