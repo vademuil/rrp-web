@@ -104,6 +104,11 @@ if app_id:
     row = find_price_row(ssrp_df, usd_price)
     df = calculate_net_prices(row, currencies, partner_share, rates)
 
+    all_known = sum(CURRENCY_GROUPS.values(), [])
+    found = df["Currency"].unique().tolist() if "Currency" in df.columns else []
+    missing = [c for c in found if c not in all_known]
+    if missing:
+        st.warning(f"Валюты, не найденные в группах: {missing}")
     if df.empty or "Currency" not in df.columns:
         st.warning("Нет данных для нормализации. Проверь SSRP и валюты.")
         st.stop()
