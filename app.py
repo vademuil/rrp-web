@@ -96,7 +96,10 @@ if app_id:
         rates = get_exchange_rates()
         row = find_price_row(ssrp_df, usd_price)
         df = calculate_net_prices(row, currencies, partner_share, rates)
-        df = normalize_by_group(df, partner_share)
+        if 'Currency' not in df.columns or df.empty:
+        st.warning('Нет данных для нормализации. Проверь SSRP и валюты.')
+        st.stop()
+    df = normalize_by_group(df, partner_share)
 
         def highlight_adj(s):
             return ["background-color: #C6EFCE" if adj else "" for adj in s]
