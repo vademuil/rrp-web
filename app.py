@@ -3,14 +3,13 @@ import streamlit as st
 import pandas as pd
 import requests
 import io
+from group_currency_data import CURRENCY_GROUPS, BASE_CURRENCY_BY_GROUP
 
 VAT_BY_COUNTRY = {
     'us': 0, 'eu': 21, 'gb': 20, 'ru': 20, 'cn': 13, 'au': 10, 'br': 17,
     'ca': 5, 'jp': 10, 'mx': 16, 'kr': 10, 'tr': 18, 'za': 15, 'ch': 8,
     'in': 18, 'pl': 23, 'nzd': 15, 'nok': 25, 'kz': 12, 'ua': 20
 }
-
-CURRENCY_GROUPS = {'EUR': ['EUR', 'USD', 'GBP', 'CAD', 'AUD', 'CHF', 'NOK', 'NZD', 'PLN'], 'USD_MENA': ['ZAR', 'ILS', 'AED', 'SAR', 'QAR', 'KWD'], 'USD_CIS': ['RUB', 'KZT', 'UAH'], 'JPY': ['JPY', 'KRW'], 'CNY': ['CNY'], 'USD_SASIA': ['INR', 'VND', 'THB', 'TWD', 'PHP', 'HKD', 'IDR', 'MYR', 'SGD'], 'USD_LATAM': ['BRL', 'CLP', 'COP', 'CRC', 'MXN', 'PEN', 'UYU']}
 
 @st.cache_data
 def load_ssrp():
@@ -38,11 +37,11 @@ def get_exchange_rates():
     r = requests.get(url)
     return r.json().get("rates", {})
 
-def find_group(currency):
-    for base, group in CURRENCY_GROUPS.items():
-        if currency in group:
-            return base
-    return None
+def find_group_and_base(currency):
+    for group, currencies in CURRENCY_GROUPS.items():
+        if currency in currencies:
+            return group, BASE_CURRENCY_BY_GROUP.get(group)
+    return None, None
 
 def calculate_adjusted_prices(base_price, ssrp_df, partner_percent, rates, currencies):
     ref_prices = ssrp_df["us"].astype(float)
@@ -50,7 +49,6 @@ def calculate_adjusted_prices(base_price, ssrp_df, partner_percent, rates, curre
     selected_row = ssrp_df.loc[closest_idx].astype(float)
 
     rows = []
-    base_currency = "EUR"
 
     for country in selected_row.index:
         try:
@@ -58,9 +56,10 @@ def calculate_adjusted_prices(base_price, ssrp_df, partner_percent, rates, curre
             currency = currencies[selected_row.index.get_loc(country)].strip().upper()
             vat = VAT_BY_COUNTRY.get(country.lower(), 0)
             net_local = srp / (1 + vat / 100) * (partner_percent / 100)
-
             rate = rates.get(currency, 1)
             net_eur = net_local / rate
+
+            group, base_currency = find_group_and_base(currency)
 
             rows.append({
                 "Country": country.upper(),
@@ -70,7 +69,8 @@ def calculate_adjusted_prices(base_price, ssrp_df, partner_percent, rates, curre
                 "Net Local": round(net_local, 2),
                 "Net EUR": round(net_eur, 2),
                 "Rate": rate,
-                "Group": find_group(currency)
+                "Group": group,
+                "Base Currency": base_currency
             })
         except:
             continue
@@ -78,13 +78,11 @@ def calculate_adjusted_prices(base_price, ssrp_df, partner_percent, rates, curre
     df = pd.DataFrame(rows)
 
     for group, group_df in df.groupby("Group"):
-        if group_df.empty:
-            continue
-        base_value = group_df[group_df["Currency"] == group].get("Net EUR")
-        base = base_value.mean() if not base_value.empty else group_df["Net EUR"].mean()
-        df.loc[group_df.index, "Δ from base (%)"] = ((group_df["Net EUR"] - base) / base * 100).round(2)
+        base_currency = group_df["Base Currency"].iloc[0]
+        base_val = group_df[group_df["Currency"] == base_currency]["Net EUR"].mean()
+        df.loc[group_df.index, "Δ from base (%)"] = ((group_df["Net EUR"] - base_val) / base_val * 100).round(2)
         df.loc[group_df.index, "Adj Net EUR"] = group_df["Net EUR"].apply(
-            lambda x: base if abs((x - base) / base * 100) > 5 else x
+            lambda x: base_val if abs((x - base_val) / base_val * 100) > 5 else x
         )
 
     df["Adj Net Local"] = df["Adj Net EUR"] * df["Rate"]
@@ -95,7 +93,7 @@ def calculate_adjusted_prices(base_price, ssrp_df, partner_percent, rates, curre
     return df
 
 # Streamlit UI
-st.title("Steam Partner Price Calculator")
+st.title("Steam Partner Price Calculator (Group-Based)")
 app_id = st.text_input("Steam App ID")
 partner_share = st.number_input("Partner Share (%)", min_value=1, max_value=100, value=70)
 
@@ -111,6 +109,6 @@ if app_id:
         output = io.BytesIO()
         with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
             df.to_excel(writer, index=False)
-        st.download_button("📥 Download Excel", output.getvalue(), "final_prices.xlsx")
+        st.download_button("📥 Download Excel", output.getvalue(), "final_group_prices.xlsx")
     else:
         st.error("Could not fetch Steam price. Check App ID.")
