@@ -120,6 +120,8 @@ if app_id:
         ssrp_df, country_codes, currencies = load_ssrp()
         rates = get_exchange_rates()
         df = calculate_adjusted_prices(base_price, ssrp_df, partner_share, rates, currencies)
+        if df.empty:
+            st.stop()
         st.dataframe(df)
 
         output = io.BytesIO()
