@@ -5,7 +5,6 @@ import requests
 import io
 from group_currency_data import CURRENCY_GROUPS, BASE_CURRENCY_BY_GROUP
 
-# VAT по странам
 VAT_BY_CURRENCY = {
     "EUR": 0.21, "USD": 0.0, "GBP": 0.20, "RUB": 0.20, "CNY": 0.13,
     "BRL": 0.17, "PLN": 0.23, "TRY": 0.18, "KRW": 0.10, "JPY": 0.10,
@@ -23,10 +22,10 @@ def load_ssrp():
     return prices, countries, currencies
 
 def get_usd_price(app_id):
-    url = f"https://store.steampowered.com/api/appdetails?appids={app_id}&cc=us"
-    r = requests.get(url)
-    data = r.json()
     try:
+        url = f"https://store.steampowered.com/api/appdetails?appids={app_id}&cc=us"
+        r = requests.get(url)
+        data = r.json()
         price = data[str(app_id)]["data"]["price_overview"]["initial"] / 100
         return round(price, 2)
     except:
@@ -45,29 +44,35 @@ def find_price_row(ssrp_df, usd_price):
 def calculate_net_prices(price_row, currencies, partner_percent, rates):
     result = []
     for idx, (country, srp) in enumerate(price_row.items()):
-        currency = currencies.reset_index(drop=True)[idx].strip().upper()
-        vat = VAT_BY_CURRENCY.get(currency, 0)
-        rate = rates.get(currency, None)
-        if rate is None or rate == 0:
+        try:
+            currency = currencies.reset_index(drop=True)[idx].strip().upper()
+            vat = VAT_BY_CURRENCY.get(currency, 0)
+            rate = rates.get(currency, None)
+            if rate is None or rate == 0:
+                continue
+            net = srp / (1 + vat) * (partner_percent / 100)
+            net_eur = net / rate
+            result.append({
+                "Country": country.upper(),
+                "Currency": currency,
+                "Original SRP": srp,
+                "VAT": vat,
+                "Net": round(net, 4),
+                "Net EUR": round(net_eur, 4),
+                "Rate": rate
+            })
+        except:
             continue
-        net = srp / (1 + vat) * (partner_percent / 100)
-        net_eur = net / rate
-        result.append({
-            "Country": country.upper(),
-            "Currency": currency,
-            "Original SRP": srp,
-            "VAT": vat,
-            "Net": round(net, 4),
-            "Net EUR": round(net_eur, 4),
-            "Rate": rate
-        })
     return pd.DataFrame(result)
 
 def normalize_by_group(df, partner_percent):
-    df["Group"] = df["Currency"].apply(lambda c: next((g for g, lst in CURRENCY_GROUPS.items() if c in lst), None))
+    df["Group"] = df["Currency"].apply(
+        lambda c: next((g for g, lst in CURRENCY_GROUPS.items() if c in lst), None)
+    )
     df["Base Currency"] = df["Group"].map(BASE_CURRENCY_BY_GROUP)
     df["Base Net EUR"] = df.apply(
-        lambda row: df[(df["Group"] == row["Group"]) & (df["Currency"] == row["Base Currency"])]["Net EUR"].mean(),
+        lambda row: df[(df["Group"] == row["Group"]) & (df["Currency"] == row["Base Currency"])]["Net EUR"].mean()
+        if row["Base Currency"] in df["Currency"].values else row["Net EUR"],
         axis=1
     )
     df["Δ %"] = ((df["Net EUR"] - df["Base Net EUR"]) / df["Base Net EUR"] * 100).round(2)
@@ -81,7 +86,8 @@ def normalize_by_group(df, partner_percent):
     )
     return df
 
-st.title("Steam SRP Recalculator")
+# Streamlit UI
+st.title("Steam SRP Recalculator (Final Build)")
 
 app_id = st.text_input("Enter Steam App ID")
 partner_share = st.number_input("Partner Share %", value=70, min_value=1, max_value=100)
@@ -90,23 +96,26 @@ if app_id:
     usd_price = get_usd_price(app_id)
     if not usd_price:
         st.error("Could not fetch price from Steam")
-    else:
-        st.success(f"Base price in USD: ${usd_price}")
-        ssrp_df, _, currencies = load_ssrp()
-        rates = get_exchange_rates()
-        row = find_price_row(ssrp_df, usd_price)
-        df = calculate_net_prices(row, currencies, partner_share, rates)
-        if 'Currency' not in df.columns or df.empty:
-    st.warning('Нет данных для нормализации. Проверь SSRP и валюты.')
-    st.stop()
+        st.stop()
+
+    st.success(f"Base price in USD: ${usd_price}")
+    ssrp_df, _, currencies = load_ssrp()
+    rates = get_exchange_rates()
+    row = find_price_row(ssrp_df, usd_price)
+    df = calculate_net_prices(row, currencies, partner_share, rates)
+
+    if df.empty or "Currency" not in df.columns:
+        st.warning("Нет данных для нормализации. Проверь SSRP и валюты.")
+        st.stop()
+
     df = normalize_by_group(df, partner_share)
 
-        def highlight_adj(s):
-            return ["background-color: #C6EFCE" if adj else "" for adj in s]
+    def highlight_adj(s):
+        return ["background-color: #C6EFCE" if adj else "" for adj in s]
 
-        st.dataframe(df.style.apply(highlight_adj, subset=["Adjusted"], axis=1))
+    st.dataframe(df.style.apply(highlight_adj, subset=["Adjusted"], axis=1))
 
-        output = io.BytesIO()
-        with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
-            df.to_excel(writer, index=False)
-        st.download_button("Download Excel", output.getvalue(), "srp_adjusted.xlsx")
+    output = io.BytesIO()
+    with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
+        df.to_excel(writer, index=False)
+    st.download_button("Download Excel", output.getvalue(), "srp_adjusted.xlsx")
