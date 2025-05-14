@@ -1,4 +1,3 @@
-
 CURRENCY_GROUPS = {
   "ROW": [
     "EUR",
