@@ -97,8 +97,8 @@ if app_id:
         row = find_price_row(ssrp_df, usd_price)
         df = calculate_net_prices(row, currencies, partner_share, rates)
         if 'Currency' not in df.columns or df.empty:
-        st.warning('Нет данных для нормализации. Проверь SSRP и валюты.')
-        st.stop()
+    st.warning('Нет данных для нормализации. Проверь SSRP и валюты.')
+    st.stop()
     df = normalize_by_group(df, partner_share)
 
         def highlight_adj(s):
