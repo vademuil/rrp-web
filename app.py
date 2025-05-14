@@ -80,6 +80,9 @@ def calculate_adjusted_prices(base_price, ssrp_df, partner_percent, rates, curre
             continue
 
     df = pd.DataFrame(rows)
+    if df.empty or "Group" not in df.columns:
+        st.warning("Нет данных для расчёта: проверьте валютные группы и SSRP.csv")
+        return df
 
     for group, group_df in df.groupby("Group"):
         base_currency = group_df["Base Currency"].iloc[0]
