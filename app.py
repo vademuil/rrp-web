@@ -81,15 +81,20 @@ def calculate_adjusted_prices(base_price, ssrp_df, partner_percent, rates, curre
         base_currency = group_df["Base Currency"].iloc[0]
         base_val = group_df[group_df["Currency"] == base_currency]["Net EUR"].mean()
         df.loc[group_df.index, "Δ from base (%)"] = ((group_df["Net EUR"] - base_val) / base_val * 100).round(2)
-        df.loc[group_df.index, "Adj Net EUR"] = group_df["Net EUR"].apply(
-            lambda x: base_val if abs((x - base_val) / base_val * 100) > 5 else x
-        )
+
+        def adjust(row):
+            if row["Net EUR"] < base_val and abs((row["Net EUR"] - base_val) / base_val * 100) > 5:
+                return base_val
+            return row["Net EUR"]
+
+        df.loc[group_df.index, "Adj Net EUR"] = group_df.apply(adjust, axis=1)
 
     df["Adj Net Local"] = df["Adj Net EUR"] * df["Rate"]
     df["Final SRP"] = df.apply(
         lambda x: round(x["Adj Net Local"] / (partner_percent / 100) * (1 + x["VAT %"] / 100), 2), axis=1
     )
 
+    df["Adjusted"] = df["Net EUR"] != df["Adj Net EUR"]
     return df
 
 # Streamlit UI
@@ -108,7 +113,15 @@ if app_id:
 
         output = io.BytesIO()
         with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
-            df.to_excel(writer, index=False)
-        st.download_button("📥 Download Excel", output.getvalue(), "final_group_prices.xlsx")
+            df.to_excel(writer, index=False, sheet_name="Prices")
+            workbook  = writer.book
+            worksheet = writer.sheets["Prices"]
+
+            format_green = workbook.add_format({"bg_color": "#C6EFCE", "font_color": "#006100"})
+            for idx, adjusted in enumerate(df["Adjusted"], start=2):
+                if adjusted:
+                    worksheet.set_row(idx - 1, cell_format=format_green)
+
+        st.download_button("📥 Download Excel", output.getvalue(), "final_group_prices_colored.xlsx")
     else:
         st.error("Could not fetch Steam price. Check App ID.")
