@@ -56,8 +56,10 @@ def calculate_adjusted_prices(base_price, ssrp_df, partner_percent, rates, curre
             currency = currencies[selected_row.index.get_loc(country)].strip().upper()
             vat = VAT_BY_COUNTRY.get(country.lower(), 0)
             net_local = srp / (1 + vat / 100) * (partner_percent / 100)
-            rate = rates.get(currency, 1)
-            net_eur = net_local / rate
+            rate = rates.get(currency, None)
+            if rate is None or rate == 0:
+                continue
+            net_eur = round(net_local / rate, 4)
 
             group, base_currency = find_group_and_base(currency)
 
