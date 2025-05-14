@@ -4,6 +4,14 @@ import pandas as pd
 import requests
 import io
 
+VAT_BY_COUNTRY = {
+    'us': 0, 'eu': 21, 'gb': 20, 'ru': 20, 'cn': 13, 'au': 10, 'br': 17,
+    'ca': 5, 'jp': 10, 'mx': 16, 'kr': 10, 'tr': 18, 'za': 15, 'ch': 8,
+    'in': 18, 'pl': 23, 'nzd': 15, 'nok': 25, 'kz': 12, 'ua': 20
+}
+
+CURRENCY_GROUPS = {'EUR': ['EUR', 'USD', 'GBP', 'CAD', 'AUD', 'CHF', 'NOK', 'NZD', 'PLN'], 'USD_MENA': ['ZAR', 'ILS', 'AED', 'SAR', 'QAR', 'KWD'], 'USD_CIS': ['RUB', 'KZT', 'UAH'], 'JPY': ['JPY', 'KRW'], 'CNY': ['CNY'], 'USD_SASIA': ['INR', 'VND', 'THB', 'TWD', 'PHP', 'HKD', 'IDR', 'MYR', 'SGD'], 'USD_LATAM': ['BRL', 'CLP', 'COP', 'CRC', 'MXN', 'PEN', 'UYU']}
+
 @st.cache_data
 def load_ssrp():
     df = pd.read_csv("SSRP.csv", sep=";", header=None)
@@ -25,56 +33,84 @@ def fetch_steam_price(app_id):
     except:
         return None
 
-def calculate_prices(base_price, ssrp_df):
+def get_exchange_rates():
+    url = "https://api.exchangerate.host/latest?base=EUR"
+    r = requests.get(url)
+    return r.json().get("rates", {})
+
+def find_group(currency):
+    for base, group in CURRENCY_GROUPS.items():
+        if currency in group:
+            return base
+    return None
+
+def calculate_adjusted_prices(base_price, ssrp_df, partner_percent, rates, currencies):
     ref_prices = ssrp_df["us"].astype(float)
     closest_idx = (ref_prices - base_price).abs().idxmin()
     selected_row = ssrp_df.loc[closest_idx].astype(float)
 
-    vat_by_country = {
-        "eu": 0.20, "gb": 0.20, "ru": 0.20, "tr": 0.18, "jp": 0.10,
-        "us": 0.0, "cn": 0.0, "ua": 0.20, "br": 0.15
-    }
+    rows = []
+    base_currency = "EUR"
 
-    countries = selected_row.index
-    original_prices = selected_row.values
-    final_prices = []
-    percents = []
+    for country in selected_row.index:
+        try:
+            srp = float(selected_row[country])
+            currency = currencies[selected_row.index.get_loc(country)].strip().upper()
+            vat = VAT_BY_COUNTRY.get(country.lower(), 0)
+            net_local = srp / (1 + vat / 100) * (partner_percent / 100)
 
-    for country in countries:
-        original_price = selected_row[country]
-        vat = vat_by_country.get(country, 0.0)
-        final_price = round(original_price * (1 + vat), 2)
-        final_prices.append(final_price)
+            rate = rates.get(currency, 1)
+            net_eur = net_local / rate
 
-        percent_diff = ((final_price - original_price) / original_price) * 100 if original_price != 0 else 0
-        percents.append(round(percent_diff, 2))
+            rows.append({
+                "Country": country.upper(),
+                "Currency": currency,
+                "VAT %": vat,
+                "Original SRP": srp,
+                "Net Local": round(net_local, 2),
+                "Net EUR": round(net_eur, 2),
+                "Rate": rate,
+                "Group": find_group(currency)
+            })
+        except:
+            continue
 
-    result_df = pd.DataFrame({
-        "Country": countries.str.upper(),
-        "Original SSRP Price": original_prices,
-        "Final Price (with VAT)": final_prices,
-        "Change (%)": percents
-    })
+    df = pd.DataFrame(rows)
 
-    return result_df
+    for group, group_df in df.groupby("Group"):
+        if group_df.empty:
+            continue
+        base_value = group_df[group_df["Currency"] == group].get("Net EUR")
+        base = base_value.mean() if not base_value.empty else group_df["Net EUR"].mean()
+        df.loc[group_df.index, "Δ from base (%)"] = ((group_df["Net EUR"] - base) / base * 100).round(2)
+        df.loc[group_df.index, "Adj Net EUR"] = group_df["Net EUR"].apply(
+            lambda x: base if abs((x - base) / base * 100) > 5 else x
+        )
 
-st.title("Steam Price Recommendation Tool")
-app_id = st.text_input("Enter Steam App ID:", "")
+    df["Adj Net Local"] = df["Adj Net EUR"] * df["Rate"]
+    df["Final SRP"] = df.apply(
+        lambda x: round(x["Adj Net Local"] / (partner_percent / 100) * (1 + x["VAT %"] / 100), 2), axis=1
+    )
+
+    return df
+
+# Streamlit UI
+st.title("Steam Partner Price Calculator")
+app_id = st.text_input("Steam App ID")
+partner_share = st.number_input("Partner Share (%)", min_value=1, max_value=100, value=70)
 
 if app_id:
-    with st.spinner("Fetching base price from Steam..."):
-        base_price = fetch_steam_price(app_id)
-
-    if base_price is None:
-        st.error("❌ Could not fetch base price for this App ID.")
-    else:
-        st.success(f"Base price (USD): ${base_price:.2f}")
-        ssrp_df, _, _ = load_ssrp()
-        result_df = calculate_prices(base_price, ssrp_df)
-
-        st.dataframe(result_df)
+    base_price = fetch_steam_price(app_id)
+    if base_price:
+        st.success(f"Base SRP from Steam: ${base_price:.2f}")
+        ssrp_df, country_codes, currencies = load_ssrp()
+        rates = get_exchange_rates()
+        df = calculate_adjusted_prices(base_price, ssrp_df, partner_share, rates, currencies)
+        st.dataframe(df)
 
         output = io.BytesIO()
         with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
-            result_df.to_excel(writer, index=False)
-        st.download_button("📥 Download as Excel", output.getvalue(), "prices_detailed.xlsx")
+            df.to_excel(writer, index=False)
+        st.download_button("📥 Download Excel", output.getvalue(), "final_prices.xlsx")
+    else:
+        st.error("Could not fetch Steam price. Check App ID.")
